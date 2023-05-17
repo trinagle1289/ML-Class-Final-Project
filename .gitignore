@@ -1,3 +1,6 @@
+# 指令存放
+cmds/run-*.bat
+
 # 訓練影像
 resources/training_image
 
