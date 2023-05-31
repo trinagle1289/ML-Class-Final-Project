@@ -1,8 +1,9 @@
 # 指令存放
 cmds/run-*.bat
 
-# 訓練影像
+# 訓練資料
 resources/training_image
+resources/annotation
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
