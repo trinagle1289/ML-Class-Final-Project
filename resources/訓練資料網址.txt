@@ -1,0 +1,5 @@
+https://universe.roboflow.com/project-ic3eu/detect-person-raise-two-hands
+https://universe.roboflow.com/project-ic3eu/detect-person-hands-up
+https://universe.roboflow.com/project-ic3eu/detect-person-raise-left-hands
+https://universe.roboflow.com/project-ic3eu/detect-person-raise-right-hands
+https://universe.roboflow.com/project-ic3eu/detect-human-stand-at-attention
