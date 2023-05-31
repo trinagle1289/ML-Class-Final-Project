@@ -1,12 +1,14 @@
-file_name='file_name.pth' # 副檔名通常以.pt或.pth儲存，建議使用.pth
+file_name='PreciseLanding_202211152210.pth' # 副檔名通常以.pt或.pth儲存，建議使用.pth
 import torch
 device=torch.device('cuda') # 'cuda'/'cpu'，import torch
-num_classes=4 # 物件類別數+1(背景)
+num_classes=2 # 物件類別數+1(背景)
 batch_size=1 # 必為1
 variances=[0.1,0.2] # 設定gHat中cx、cy與w、h間的權重(須與訓練的設定值相同)
-top_k=200 # 各類別依scores挑出最大前top_k個後代入NMS，參考值=200
+conf_threshold=0.01 # 將pred_conf大於等於conf_threshold的結果視為候選物件(並命其為scores)，參考值=0.01
+top_k=200 # 依scores挑出最大前top_k個後代入NMS，參考值=200
 NMS_threshold=0.5 # 將同類別且IoU小於等於NMS_threshold的物件視為不同物件。此值愈小邊界框會愈少，參考值=0.5
-TestImage='D:\Python\TrainingImage/'
+TestImage='D:\Dropbox\TrainingImage/'
+TestImage='D:\Dropbox\TrainingImage/'
 
 # 取得網路
 from torch import nn
@@ -211,16 +213,15 @@ import os
 all_image_name=os.listdir(TestImage) # 所有影像檔名(含.jpg)，import os
 from PIL import Image
 for image_name in all_image_name:
-    img_cv=cv2.imread(TestImage+image_name) # 讀取影像(僅用於繪圖)，img：[480,640,3]
-    I=Image.open(TestImage+image_name,mode='r') # from PIL import Image
-    img=transforms(I)
+    img_cv=cv2.imread(TestImage+image_name) # 讀取影像，img：[480,640,3]
+    I=Image.fromarray(cv2.cvtColor(img_cv,cv2.COLOR_BGR2RGB)) # from PIL import Image，opencv轉PIL.Image
+    img=transforms(I) # [3,300,300]，from torchvision import transforms
     img=img.unsqueeze(0) # [1,3,300,300]
     img=img.to(device)
 
     # 預測結果
     pred_loc,pred_conf=detector(img) # pred_loc：[batch_size,8732,4]，pred_conf：[batch_size,8732,num_classes]
     pred_conf=pred_conf.view(batch_size,pred_conf.shape[1],num_classes).transpose(2,1) # [batch_size,num_classes,8732]
-    max_pred_conf,_=torch.max(pred_conf,dim=1) # 每個錨框最大預測置信值，[batch_size,8732]，import torch
     for i in range(batch_size):
         pred_cx=(anchor[:,0]+anchor[:,2])/2+pred_loc[i][:,0]*((anchor[:,2]-anchor[:,0])*variances[0]) # 預測的cx，[8732]
         pred_cy=(anchor[:,1]+anchor[:,3])/2+pred_loc[i][:,1]*((anchor[:,3]-anchor[:,1])*variances[0]) # 預測的cy，[8732]
@@ -228,8 +229,8 @@ for image_name in all_image_name:
         pred_h=torch.exp(pred_loc[i][:,3]*variances[1])*(anchor[:,3]-anchor[:,1])  # 預測的h，[8732]，import torch
         pred_bbox=torch.stack((pred_cx-pred_w/2,pred_cy-pred_h/2,pred_cx+pred_w/2,pred_cy+pred_h/2),dim=1) # 預測的邊界框，[8732,4]，[xmin ymin xmax ymax]，import torch
         for j in range(1,num_classes): # 1~(num_classes-1)
-            c_mask=torch.ge(pred_conf[i][j],max_pred_conf[i]) # 每個錨框對第j(1~(num_classes-1))個類別的預測置信值是否在所有類別(包含背景)中為最大，True/False，[8732]，import torch
-            scores=pred_conf[i][j][c_mask] # 針對第i個batch的第j個類別，若其預測置信值在所有類別(包含背景)中為最大，則取出其預測置信值，並命其為scores，[如533]
+            c_mask=pred_conf[i][j].ge(conf_threshold) # 每個錨框對第j個物件的預測置信值是否大於等於conf_threshold，True/False，[8732]
+            scores=pred_conf[i][j][c_mask] # 針對第i個batch的第j個物件，挑出大於conf_threshold的預測置信值，並命其為scores，[如533]
             if scores.size(0)==0:
                 continue
             l_mask=c_mask.unsqueeze(1).expand_as(pred_bbox)
@@ -243,7 +244,6 @@ for image_name in all_image_name:
             while idx.numel()>0:
                 b=idx[-1] # 目前scores中最大值的位置編號
                 cv2.rectangle(img_cv,(int(boxes[b,0]/300*img_cv.shape[1]),int(boxes[b,1]/300*img_cv.shape[0])),(int(boxes[b,2]/300*img_cv.shape[1]),int(boxes[b,3]/300*img_cv.shape[0])),(255,0,0),3)
-                cv2.putText(img_cv,f'{j}',(int(boxes[b,0]/300*img_cv.shape[1]),int(boxes[b,1]/300*img_cv.shape[0]+120)),cv2.FONT_HERSHEY_SIMPLEX,5,(255,0,0),10,cv2.LINE_AA)
                 best_idx.append(b.item())
                 if idx.size(0)==1:
                     break
@@ -258,5 +258,4 @@ for image_name in all_image_name:
 
     img_small=cv2.resize(img_cv,(1632,1232)) # 改變尺寸
     cv2.imshow('Frame',img_small) # 顯示新圖
-    k=cv2.waitKey(0)
-
+    k=cv2.waitKey(1)

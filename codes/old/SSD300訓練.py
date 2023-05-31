@@ -1,18 +1,17 @@
-file_name='file_name.pth' # 副檔名通常以.pt或.pth儲存，建議使用.pth
+file_name='PeopleCounting_202305031650.pth' # 副檔名通常以.pt或.pth儲存，建議使用.pth
 import torch 
 device=torch.device('cuda') # 'cuda'/'cpu'，import torch
-num_classes=4 # 物件類別數+1(背景)
-train_size=7
+num_classes=2 # 物件類別數+1(背景)
+train_size=500
 valid_size=0
-batch_size=7
-learning_rate=0.0001
-step_size=500 # Reriod of learning rate decay
+batch_size=10
+learning_rate=0.001
+step_size=100 # Reriod of learning rate decay
 threshold=0.5 # 錨框匹配為物件/背景的閥值，參考值=0.5
 variances=[0.1,0.2] # 設定gHat中cx、cy與w、h間的權重
-alpha=1 # multi-task loss function內的權重
-epochs=100
-TrainingImage='D:\Python\TrainingImage/'
-Annotation='D:\Python\Annotation/'
+epochs=1000
+TrainingImage='D:\TrainingImage/'
+Annotation='D:\Annotation/'
 
 from torchvision import transforms
 transforms=transforms.Compose([transforms.Resize((300,300)),transforms.ToTensor(),transforms.Normalize((0.5,0.5,0.5),(0.5,0.5,0.5))]) # ToTensor將影像像素歸一化至0~1(直接除以255)，from torchvision import transforms
@@ -88,7 +87,7 @@ for i,j in enumerate(feature_scale):
         abox+=[cx-math.sqrt(sk[i]*sk[i+1])/2,cy-math.sqrt(sk[i]*sk[i+1])/2,cx+math.sqrt(sk[i]*sk[i+1])/2,cy+math.sqrt(sk[i]*sk[i+1])/2] # [xmin ymin xmax ymax]
 anchor=torch.Tensor(abox).view(-1,4).to(device) # [8732,4] (所有錨框的[xmin ymin xmax ymax]，皆相對於輸入影像的比例位置，乘以輸入影像尺寸即為在輸入影像的像素位置)，import torch
 anchor.clamp_(max=1, min=0) # 限定最大值為1、最小值0
-anchor=anchor*300 # 轉換成模型輸入影像尺寸(300*300)
+anchor=anchor*(img[0].size(1)) # 轉換成輸入影像尺寸
 
 from torch import nn
 class SSD(nn.Module):
@@ -264,7 +263,7 @@ class L2Norm(nn.Module):
 
 detector=SSD().to(device)
 optimizer=torch.optim.Adam(detector.parameters(),lr=learning_rate) # import torch
-#optimizer=torch.optim.SGD(detector.parameters(),lr=learning_rate) # import torch
+#optimizer=torch.optim.SGD(detecotr.parameters(),lr=learning_rate) # import torch
 scheduler=torch.optim.lr_scheduler.StepLR(optimizer,step_size,0.1) # import torch
 num_anchor=anchor.size(0) # 8732，anchor為[8732,4]
 for i in range(1,epochs+1):
@@ -317,18 +316,19 @@ for i in range(1,epochs+1):
         crossEntropy=torch.logsumexp(batch_pred_conf,dim=1,keepdim=True)-batch_pred_conf.gather(1,matched_class.view(-1,1)) # 計算每個錨框匹配物件(包含背景)的負logsumexp，[batch_size*8732,1]，import torch
             # matched_class.view(-1,1)：將matched_class(每個錨框匹配物件的類別(0,1,2, ...))內的batch整合在一起，[batch_size*8732,1]
             # batch_pred_conf.gather(1,matched_class.view(-1,1))：根據matched_class.view(-1,1)(每個錨框匹配物件的類別(0,1,2, ...))取出該物件類別的預測置信值(pred_conf)
-        crossEntropy_pos=crossEntropy[pos.view(-1,1)].sum(dim=0,keepdim=True)
-        crossEntropy_neg=crossEntropy
-        crossEntropy_neg[pos.view(-1,1)]=0 # 利用threshold篩選後若錨框有匹配到物件，則令該錨框匹配物件的負logsumexp為0，[batch_size*8732,1]
-        crossEntropy_neg=crossEntropy_neg.view(batch_size,-1) # 將crossEntropy從[batch_size*8732,1]轉換成[batch_size,8732]        
-        _,background_idx=crossEntropy_neg.sort(1,descending=True) # background_idx：[batch_size,8732]，將有匹配到物件的錨框的負logsumexp設為0後，依負logsumexp由大而小排列並取得錨框編號(如編號5即表示第5個錨框所匹配的背景的負logsumexp為最大)
+        crossEntropy[pos.view(-1,1)]=0 # 利用threshold篩選後若錨框有匹配到物件，則令該錨框匹配物件的負logsumexp為0，[batch_size*8732,1]
+        crossEntropy=crossEntropy.view(batch_size,-1) # 將crossEntropy從[batch_size*8732,1]轉換成[batch_size,8732]        
+        _,background_idx=crossEntropy.sort(1,descending=True) # background_idx：[batch_size,8732]，將有匹配到物件的錨框的負logsumexp設為0後，依負logsumexp由大而小排列並取得錨框編號(如編號5即表示第5個錨框所匹配的背景的負logsumexp為最大)
         _,idx_rank=background_idx.sort(1) # idx_rank：[batch_size,8732]，依crossEntropy由小而大排序，如4、1、3、2表示第1個錨框在負logsumexp中排第4(愈大表示負logsumexp愈小)，第2個錨框在負logsumexp中排第1
         num_neg=torch.clamp(3*num_pos,max=pos.size(1)-num_pos) # num_neg：[batch_size,1]，定義每張影像的負樣本個數為正樣本個數的3倍，上限改為錨框個數-正樣本個數，import torch
         neg=idx_rank<num_neg.expand_as(idx_rank) # neg：True/False，將負logsumexp最大的前num_neg個設為True，[batch_size,8732]
-        crossEntropy_neg=crossEntropy[neg.view(-1,1)].sum(dim=0,keepdim=True)
-        L_conf=crossEntropy_pos+crossEntropy_neg
+        pos_pred_conf=pos.unsqueeze(2).expand_as(pred_conf) # True/False，將pred_conf中正樣本的部分令為True，其餘為False，[batch_size,8732,num_classes]，
+        neg_pred_conf=neg.unsqueeze(2).expand_as(pred_conf) # True/False，將pred_conf中負樣本的部分令為True，其餘為False，[batch_size,8732,num_classes]
+        input=pred_conf[(pos_pred_conf+neg_pred_conf).gt(0)].view(-1,num_classes) # 挑出正樣本與負樣本的pred_conf，[num_pos+num_neg,num_classes]
+        target=matched_class[(pos+neg).gt(0)] # 挑出正樣本與負樣本的類別(包含背景)，[num_pos+num_neg]
+        L_conf=torch.nn.functional.cross_entropy(input,target) # 計算一個batch內正樣本與負樣本的L_conf，[1]，import torch
         N=num_pos.data.sum()
-        loss=(L_conf+alpha*L_loc)/N
+        loss=(L_loc+L_conf)/N
         train_loss+=loss.item()
         train_batch+=1
         optimizer.zero_grad() # 權重梯度歸零
@@ -385,18 +385,19 @@ for i in range(1,epochs+1):
         crossEntropy=torch.logsumexp(batch_pred_conf,dim=1,keepdim=True)-batch_pred_conf.gather(1,matched_class.view(-1,1)) # 計算每個錨框匹配物件(包含背景)的負logsumexp，[batch_size*8732,1]，import torch
             # matched_class.view(-1,1)：將matched_class(每個錨框匹配物件的類別(0,1,2, ...))內的batch整合在一起，[batch_size*8732,1]
             # batch_pred_conf.gather(1,matched_class.view(-1,1))：根據matched_class.view(-1,1)(每個錨框匹配物件的類別(0,1,2, ...))取出該物件類別的預測置信值(pred_conf)
-        crossEntropy_pos=crossEntropy[pos.view(-1,1)].sum(dim=0,keepdim=True)
-        crossEntropy_neg=crossEntropy
-        crossEntropy_neg[pos.view(-1,1)]=0 # 利用threshold篩選後若錨框有匹配到物件，則令該錨框匹配物件的負logsumexp為0，[batch_size*8732,1]
-        crossEntropy_neg=crossEntropy_neg.view(batch_size,-1) # 將crossEntropy從[batch_size*8732,1]轉換成[batch_size,8732]        
-        _,background_idx=crossEntropy_neg.sort(1,descending=True) # background_idx：[batch_size,8732]，將有匹配到物件的錨框的負logsumexp設為0後，依負logsumexp由大而小排列並取得錨框編號(如編號5即表示第5個錨框所匹配的背景的負logsumexp為最大)
+        crossEntropy[pos.view(-1,1)]=0 # 利用threshold篩選後若錨框有匹配到物件，則令該錨框匹配物件的負logsumexp為0，[batch_size*8732,1]
+        crossEntropy=crossEntropy.view(batch_size,-1) # 將crossEntropy從[batch_size*8732,1]轉換成[batch_size,8732]        
+        _,background_idx=crossEntropy.sort(1,descending=True) # background_idx：[batch_size,8732]，將有匹配到物件的錨框的負logsumexp設為0後，依負logsumexp由大而小排列並取得錨框編號(如編號5即表示第5個錨框所匹配的背景的負logsumexp為最大)
         _,idx_rank=background_idx.sort(1) # idx_rank：[batch_size,8732]，依crossEntropy由小而大排序，如4、1、3、2表示第1個錨框在負logsumexp中排第4(愈大表示負logsumexp愈小)，第2個錨框在負logsumexp中排第1
         num_neg=torch.clamp(3*num_pos,max=pos.size(1)-num_pos) # num_neg：[batch_size,1]，定義每張影像的負樣本個數為正樣本個數的3倍，上限改為錨框個數-正樣本個數，import torch
         neg=idx_rank<num_neg.expand_as(idx_rank) # neg：True/False，將負logsumexp最大的前num_neg個設為True，[batch_size,8732]
-        crossEntropy_neg=crossEntropy[neg.view(-1,1)].sum(dim=0,keepdim=True)
-        L_conf=crossEntropy_pos+crossEntropy_neg
+        pos_pred_conf=pos.unsqueeze(2).expand_as(pred_conf) # True/False，將pred_conf中正樣本的部分令為True，其餘為False，[batch_size,8732,num_classes]，
+        neg_pred_conf=neg.unsqueeze(2).expand_as(pred_conf) # True/False，將pred_conf中負樣本的部分令為True，其餘為False，[batch_size,8732,num_classes]
+        input=pred_conf[(pos_pred_conf+neg_pred_conf).gt(0)].view(-1,num_classes) # 挑出正樣本與負樣本的pred_conf，[num_pos+num_neg,num_classes]
+        target=matched_class[(pos+neg).gt(0)] # 挑出正樣本與負樣本的類別(包含背景)，[num_pos+num_neg]
+        L_conf=torch.nn.functional.cross_entropy(input,target) # 計算一個batch內正樣本與負樣本的L_conf，[1]，import torch
         N=num_pos.data.sum()
-        loss=(L_conf+alpha*L_loc)/N
+        loss=(L_loc+L_conf)/N
         valid_loss+=loss.item()
         valid_batch+=1
     if valid_batch!=0:
